@@ -225,9 +225,9 @@
     const present = age !== null && age < windowSec;
 
     el.body.dataset.state = present ? "present" : "absent";
-    el.headline.textContent = present ? "Je tu! Vyraž 🏃" : "Kde nic, tu nic... 🤷";
+    el.headline.textContent = present ? "Je tu. Běž! 🏃" : "Kde nic, tu nic... 🤷";
     el.answer.textContent = present
-      ? "Senzor zachytil pohyb během posledních 30 sekund 👀."
+      ? "Senzor zachytil pohyb během posledních 30 sekund. 👀"
       : "Minimálně posledních 30 sekund tu nikdo nebyl. 🕵️";
     el.link.textContent = "živě";
 
