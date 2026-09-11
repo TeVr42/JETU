@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jednotka Efektivního Transparentního Univerzálního Hlídání</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=MonteCarlo&family=Montserrat:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #17171A;
+    --ink: #0A0C0A;
+    --muted: rgba(10, 12, 10, .55);
+    --green: #31D158;
+    --red: #FF453A;
+    --dead: #17171A;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; margin: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Montserrat", sans-serif;
+    transition: background-color .45s ease, color .45s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6vmin;
+    overflow: hidden;
+  }
+
+  body[data-state="present"] { background: var(--green); }
+  body[data-state="absent"]  { background: var(--red); }
+  body[data-state="offline"] { background: var(--dead); color: #7A7A80; }
+
+  .stage {
+    width: min(760px, 100%);
+    display: grid;
+    gap: clamp(24px, 5vmin, 48px);
+  }
+
+  .eyebrow {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    font-size: clamp(11px, 1.6vmin, 13px);
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  body[data-state="offline"] .eyebrow { color: #56565C; }
+
+  .dot {
+    display: inline-block;
+    width: .55em; height: .55em;
+    border-radius: 50%;
+    background: currentColor;
+    margin-right: .5em;
+    vertical-align: baseline;
+  }
+  body[data-state="present"] .dot { animation: pulse 1.6s ease-in-out infinite; }
+
+  @keyframes pulse { 50% { opacity: .25; } }
+
+  h1 {
+    font-family: "MonteCarlo", cursive;
+    font-weight: 700;
+    font-size: clamp(46px, 13vmin, 132px);
+    line-height: .92;
+    letter-spacing: -.03em;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .answer {
+    font-weight: 500;
+    font-size: clamp(13px, 2.2vmin, 17px);
+    letter-spacing: .04em;
+    color: var(--muted);
+    margin: 0;
+  }
+  body[data-state="offline"] .answer { color: #56565C; }
+
+  /* Podpis stránky: desetisekundové okno, které odtiká po posledním pohybu */
+  .window { display: grid; gap: 10px; }
+
+  .track {
+    position: relative;
+    height: 34px;
+    border-top: 1px solid currentColor;
+    border-bottom: 1px solid currentColor;
+    opacity: .85;
+  }
+
+  .fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: currentColor;
+    opacity: .22;
+    width: 0%;
+    transition: width .25s linear;
+  }
+
+  .ticks {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: repeat(10, 1fr);
+  }
+  .ticks span { border-left: 1px solid currentColor; opacity: .3; }
+  .ticks span:first-child { border-left: 0; }
+
+  .scale {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    letter-spacing: .12em;
+    color: var(--muted);
+  }
+  body[data-state="offline"] .scale { color: #56565C; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body data-state="offline">
+
+  <main class="stage">
+    <div class="eyebrow">
+      <span><span class="dot"></span><span id="link">připojuji</span></span>
+      <span id="stamp">—</span>
+    </div>
+
+    <h1 id="headline">Bez signálu ⚙️</h1>
+    <p class="answer" id="answer">Čekám na data ze senzoru. ⏳</p>
+
+    <div class="window">
+      <div class="track">
+        <div class="fill" id="fill"></div>
+        <div class="ticks">
+          <span></span><span></span><span></span><span></span><span></span>
+          <span></span><span></span><span></span><span></span><span></span>
+        </div>
+      </div>
+      <div class="scale">
+        <!-- <span>Poslední pohyb ❔</span> -->
+        <span id="age">—</span>
+        <span>30 s</span>
+      </div>
+    </div>
+  </main>
+
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>
+
+  const TOPIC  = "pritomnost/je-tu-HfS578caP31B;p4kt/stav";
+  const BROKER = "wss://eab6d9c4d95b4b4b8b76500a0ffee015.s1.eu.hivemq.cloud:8884/mqtt";
+
+  const STALE = 6000; // bez zprávy déle než 6 s = senzor považujeme za mrtvý
+
+  const el = {
+    body: document.body,
+    headline: document.getElementById("headline"),
+    answer: document.getElementById("answer"),
+    link: document.getElementById("link"),
+    stamp: document.getElementById("stamp"),
+    fill: document.getElementById("fill"),
+    age: document.getElementById("age"),
+  };
+
+  let last = null;       // poslední přijatý stav
+  let lastAt = 0;        // kdy dorazil (performance.now)
+  let windowSec = 30;
+
+  const client = mqtt.connect(BROKER, {
+    username: "web-readonly",
+    password: "jetu-public-5l719ga471h3",
+    clientId: "web-" + Math.random().toString(16).slice(2, 10),
+    reconnectPeriod: 2000,
+  });
+
+  client.on("connect", () => {
+    el.link.textContent = "připojeno";
+    client.subscribe(TOPIC);
+  });
+
+  client.on("reconnect", () => { el.link.textContent = "obnovuji spojení"; });
+  client.on("error", () => { el.link.textContent = "chyba spojení"; });
+
+  client.on("message", (topic, payload) => {
+    const raw = payload.toString().trim();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      // snese i holý text "ano" / "ne"
+      data = { online: true, present: raw.toLowerCase() === "ano", age: 0 };
+    }
+    last = data;
+    lastAt = performance.now();
+    if (data.window) windowSec = data.window;
+    el.stamp.textContent = new Date().toLocaleTimeString("cs-CZ");
+    render();
+  });
+
+  function render() {
+    const stale = !last || performance.now() - lastAt > STALE;
+
+    if (stale || last.online === false) {
+      el.body.dataset.state = "offline";
+      el.headline.textContent = "Bez signálu ⚙️";
+      el.answer.textContent = "Senzor je tentam... Musíš pěšky. 🚶";
+      el.fill.style.width = "0%";
+      el.age.textContent = "";
+      return;
+    }
+
+    const drift = (performance.now() - lastAt) / 1000;
+    const age = last.age === null || last.age === undefined ? null : last.age + drift;
+    const present = age !== null && age < windowSec;
+
+    el.body.dataset.state = present ? "present" : "absent";
+    el.headline.textContent = present ? "Je tu! Vyraž 🏃" : "Kde nic, tu nic... 🤷";
+    el.answer.textContent = present
+      ? "Senzor zachytil pohyb během posledních 30 sekund 👀."
+      : "Minimálně posledních 30 sekund tu nikdo nebyl. 🕵️";
+    el.link.textContent = "živě";
+
+    const remaining = age === null ? 0 : Math.max(0, windowSec - age);
+    el.fill.style.width = (remaining / windowSec * 100) + "%";
+    // el.age.textContent = age === null ? "—" : "před " + age.toFixed(1) + " s";
+  }
+
+  setInterval(render, 200);
+</script>
+</body>
+</html>
